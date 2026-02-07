@@ -1,5 +1,5 @@
 streamlit
-tensorflow==2.15.0
+tensorflow-cpu
 scikit-learn
 Pillow
 numpy<2.0.0
