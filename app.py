@@ -6,7 +6,7 @@ import logging
 import os
 import sqlite3
 import json
-
+import tensorflow as tf  
 from tensorflow.keras.models import load_model
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
@@ -310,8 +310,8 @@ class BrainTumorAnalyzer:
     def load_cnn_model(_self):
         try:
             if os.path.exists(_self.model_path):
-                # Yaha compile=False add kar dijiye
-                return load_model(_self.model_path, compile=False) 
+                # Sirf ye niche wali line ko dhyan se replace karein
+                return tf.keras.models.load_model(_self.model_path, compile=False, safe_mode=False)
             else:
                 st.error(f"Model not found: {_self.model_path}")
                 return None
@@ -812,4 +812,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
