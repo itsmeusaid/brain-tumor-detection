@@ -282,8 +282,7 @@ class BrainTumorAnalyzer:
     def __init__(self):
         self.img_width, self.img_height = 224, 224
         self.class_labels = ['glioma', 'meningioma', 'notumor', 'pituitary']
-        self.model_path = "my_brain_tumor_mobilenetv2.h5"
-
+        self.model_path = os.path.join(os.getcwd(), "my_brain_tumor_mobilenetv2.h5")
         # Train NLP in __init__
         self.symptoms_texts = [
             "headache dizziness blurred vision",
@@ -812,5 +811,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
