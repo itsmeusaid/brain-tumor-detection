@@ -310,7 +310,8 @@ class BrainTumorAnalyzer:
     def load_cnn_model(_self):
         try:
             if os.path.exists(_self.model_path):
-                return load_model(_self.model_path)
+                # Yaha compile=False add kar dijiye
+                return load_model(_self.model_path, compile=False) 
             else:
                 st.error(f"Model not found: {_self.model_path}")
                 return None
@@ -811,3 +812,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
