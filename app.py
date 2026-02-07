@@ -1,601 +1,813 @@
 import streamlit as st
 import numpy as np
 from PIL import Image
-import pandas as pd
 from datetime import datetime
-import json
 import logging
 import os
-from pathlib import Path
-import base64
-from io import BytesIO
+import sqlite3
+import json
 
-# TensorFlow imports
 from tensorflow.keras.models import load_model
-from tensorflow.keras.preprocessing import image
-
-# Scikit-learn imports for NLP
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
 
-# Configure logging
+# ── Page Config ──
+st.set_page_config(
+    page_title="NeuroScan AI",
+    page_icon="🧠",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# ── CSS ──
+st.markdown("""
+<style>
+/* ── Banner ── */
+.ns-banner {
+    background: linear-gradient(135deg, #0f2027, #203a43, #2c5364);
+    padding: 2.2rem 2.5rem;
+    border-radius: 14px;
+    margin-bottom: 1.2rem;
+    border: 1px solid rgba(255,255,255,0.05);
+}
+.ns-banner h1 {
+    color: #ffffff !important;
+    font-size: 2rem;
+    font-weight: 700;
+    margin: 0 0 0.2rem 0;
+    letter-spacing: 0.5px;
+}
+.ns-banner p {
+    color: #94a3b8 !important;
+    font-size: 0.95rem;
+    margin: 0;
+}
+
+/* ── Section headers ── */
+.section-label {
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: #e2e8f0;
+    margin-bottom: 0.6rem;
+    padding-bottom: 0.4rem;
+    border-bottom: 2px solid #334155;
+}
+
+/* ── Result cards ── */
+.result-card {
+    background: #1e293b;
+    border: 1px solid #334155;
+    border-radius: 10px;
+    padding: 1.2rem 1.4rem;
+    margin: 0.8rem 0;
+    color: #e2e8f0;
+}
+.result-card h4 {
+    color: #f1f5f9 !important;
+    margin: 0 0 0.5rem 0;
+    font-size: 1rem;
+}
+.result-card p {
+    color: #cbd5e1 !important;
+    margin: 0.2rem 0;
+    font-size: 0.9rem;
+    line-height: 1.5;
+}
+
+/* ── Prediction badges ── */
+.pred-badge {
+    padding: 1rem 1.4rem;
+    border-radius: 10px;
+    text-align: center;
+    font-weight: 600;
+    font-size: 1rem;
+    margin: 0.6rem 0;
+    color: #ffffff !important;
+}
+.pred-high   { background: linear-gradient(135deg, #dc2626, #b91c1c); }
+.pred-medium { background: linear-gradient(135deg, #d97706, #b45309); }
+.pred-low    { background: linear-gradient(135deg, #0369a1, #0284c7); }
+.pred-clear  { background: linear-gradient(135deg, #047857, #059669); }
+
+/* ── Score bars ── */
+.score-row {
+    display: flex;
+    align-items: center;
+    margin: 0.35rem 0;
+    font-size: 0.85rem;
+    color: #cbd5e1;
+}
+.score-label { width: 110px; font-weight: 500; color: #e2e8f0; }
+.score-bar-bg {
+    flex: 1; height: 10px; background: #1e293b;
+    border-radius: 5px; margin: 0 0.6rem;
+    overflow: hidden; border: 1px solid #334155;
+}
+.score-bar-fill {
+    height: 100%; border-radius: 5px;
+    background: linear-gradient(90deg, #0ea5e9, #38bdf8);
+    transition: width 0.4s ease;
+}
+.score-value { width: 55px; text-align: right; font-weight: 600; color: #e2e8f0; }
+
+/* ── History card ── */
+.history-card {
+    background: #1e293b;
+    border-left: 4px solid #0ea5e9;
+    border-radius: 8px;
+    padding: 1rem 1.25rem;
+    margin: 0.6rem 0;
+    border-top: 1px solid #334155;
+    border-right: 1px solid #334155;
+    border-bottom: 1px solid #334155;
+}
+.history-card .hc-title {
+    font-weight: 600; font-size: 0.92rem; color: #f1f5f9; margin-bottom: 0.3rem;
+}
+.history-card .hc-body {
+    font-size: 0.85rem; color: #94a3b8; line-height: 1.6;
+}
+.history-card .hc-body b { color: #e2e8f0; }
+
+/* ── Report preview ── */
+.report-preview {
+    background: #0f172a;
+    border: 1px solid #334155;
+    border-radius: 10px;
+    padding: 1.4rem 1.8rem;
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 0.8rem;
+    line-height: 1.65;
+    color: #cbd5e1;
+    white-space: pre-wrap;
+    overflow-x: auto;
+}
+
+/* ── Status pill ── */
+.status-saved {
+    display: inline-block;
+    background: #065f46;
+    color: #6ee7b7;
+    font-size: 0.78rem;
+    font-weight: 600;
+    padding: 0.2rem 0.8rem;
+    border-radius: 20px;
+    margin: 0.3rem 0;
+}
+
+/* ── Footer ── */
+.ns-footer {
+    text-align: center; color: #64748b;
+    font-size: 0.78rem; padding: 1rem 0 0.5rem;
+}
+
+/* ── Button tweaks ── */
+div.stButton > button[kind="primary"] {
+    background: linear-gradient(135deg, #0ea5e9, #0284c7) !important;
+    color: #ffffff !important; border: none !important;
+}
+section[data-testid="stSidebar"] .stMarkdown h3 { color: #e2e8f0 !important; }
+</style>
+""", unsafe_allow_html=True)
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
+# ==========================================================
+#  DATABASE — SQLite for multi-user persistence
+# ==========================================================
+DB_PATH = "neuroscan_patients.db"
+
+
+def get_db():
+    """Get a database connection (creates tables on first call)."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS patient_records (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            patient_id  TEXT NOT NULL,
+            patient_name TEXT NOT NULL,
+            age         INTEGER,
+            gender      TEXT,
+            mri_result  TEXT,
+            mri_confidence REAL,
+            mri_details TEXT,
+            symptom_result TEXT,
+            symptom_confidence REAL,
+            symptom_text TEXT,
+            symptom_details TEXT,
+            report_text TEXT,
+            created_at  TEXT NOT NULL
+        )
+    """)
+    conn.commit()
+    return conn
+
+
+def save_record(patient_id, patient_name, age, gender,
+                mri_data, symptom_data, report_text):
+    """Save a complete diagnostic record to the database."""
+    conn = get_db()
+    conn.execute("""
+        INSERT INTO patient_records
+        (patient_id, patient_name, age, gender,
+         mri_result, mri_confidence, mri_details,
+         symptom_result, symptom_confidence, symptom_text, symptom_details,
+         report_text, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        patient_id,
+        patient_name,
+        age,
+        gender,
+        mri_data.get('prediction', '') if mri_data else None,
+        mri_data.get('confidence', 0) if mri_data else None,
+        json.dumps(mri_data.get('all_predictions', {})) if mri_data else None,
+        symptom_data.get('prediction', '') if symptom_data else None,
+        symptom_data.get('confidence', 0) if symptom_data else None,
+        symptom_data.get('input_text', '') if symptom_data else None,
+        json.dumps(symptom_data.get('all_scores', {})) if symptom_data else None,
+        report_text,
+        datetime.now().isoformat(),
+    ))
+    conn.commit()
+    conn.close()
+
+
+def search_records(patient_id="", patient_name=""):
+    """Search records by patient ID or name. Returns list of dicts."""
+    conn = get_db()
+    query = "SELECT * FROM patient_records WHERE 1=1"
+    params = []
+    if patient_id.strip():
+        query += " AND patient_id LIKE ?"
+        params.append(f"%{patient_id.strip()}%")
+    if patient_name.strip():
+        query += " AND patient_name LIKE ?"
+        params.append(f"%{patient_name.strip()}%")
+    query += " ORDER BY created_at DESC"
+
+    cursor = conn.execute(query, params)
+    columns = [desc[0] for desc in cursor.description]
+    rows = [dict(zip(columns, row)) for row in cursor.fetchall()]
+    conn.close()
+    return rows
+
+
+def delete_record(record_id):
+    """Delete a record by its ID."""
+    conn = get_db()
+    conn.execute("DELETE FROM patient_records WHERE id = ?", (record_id,))
+    conn.commit()
+    conn.close()
+
+
+def get_all_patient_ids():
+    """Get unique patient IDs for dropdown."""
+    conn = get_db()
+    cursor = conn.execute(
+        "SELECT DISTINCT patient_id, patient_name FROM patient_records ORDER BY patient_id"
+    )
+    results = cursor.fetchall()
+    conn.close()
+    return results
+
+
+# ==========================================================
+#  BrainTumorAnalyzer
+# ==========================================================
 class BrainTumorAnalyzer:
+
     def __init__(self):
         self.img_width, self.img_height = 224, 224
         self.class_labels = ['glioma', 'meningioma', 'notumor', 'pituitary']
-        self.model_path = r"D:\Intern base\Project\my_brain_tumor_mobilenetv2.h5"
-        self.confidence_threshold = 0.7
-        
-        #  symptom mapping 
+        self.model_path = "my_brain_tumor_mobilenetv2.h5"
+
+        # Train NLP in __init__
         self.symptoms_texts = [
-            "headache dizziness blurred vision", "severe headache memory loss confusion",
-            "nausea seizures vision problem", "seizures vomiting and nausea",
-            "hormone issues weight gain fatigue", "growth problems infertility hormonal",
-            "no headache no tumor normal", "healthy normal no symptoms",
+            "headache dizziness blurred vision",
+            "severe headache memory loss confusion",
+            "nausea seizures vision problem",
+            "seizures vomiting and nausea",
+            "hormone issues weight gain fatigue",
+            "growth problems infertility hormonal",
+            "no headache no tumor normal",
+            "healthy normal no symptoms",
         ]
         self.symptoms_labels = [
             "glioma", "glioma",
             "meningioma", "meningioma",
             "pituitary", "pituitary",
-            "notumor", "notumor"
+            "notumor", "notumor",
         ]
-    
+        self.tfidf = TfidfVectorizer()
+        X_train = self.tfidf.fit_transform(self.symptoms_texts)
+        self.text_clf = LogisticRegression(max_iter=200)
+        self.text_clf.fit(X_train, self.symptoms_labels)
+
     @st.cache_resource
     def load_cnn_model(_self):
-        """Load the trained CNN model"""
         try:
             if os.path.exists(_self.model_path):
-                model = load_model(_self.model_path)
-                logger.info("CNN Model loaded successfully")
-                return model
+                return load_model(_self.model_path)
             else:
-                st.error(f"Model file not found at: {_self.model_path}")
+                st.error(f"Model not found: {_self.model_path}")
                 return None
         except Exception as e:
-            logger.error(f"Error loading CNN model: {e}")
-            st.error(f"Failed to load CNN model: {str(e)}")
+            st.error(f"Failed to load model: {e}")
             return None
-    
-    @st.cache_resource
-    def load_nlp_model(_self):
-        """Load/train the NLP model for symptom analysis"""
-        try:
-            tfidf = TfidfVectorizer()
-            X_train = tfidf.fit_transform(_self.symptoms_texts)
-            text_clf = LogisticRegression(max_iter=200)
-            text_clf.fit(X_train, _self.symptoms_labels)
-            logger.info("NLP Model trained successfully")
-            return tfidf, text_clf
-        except Exception as e:
-            logger.error(f"Error training NLP model: {e}")
-            st.error(f"Failed to train NLP model: {str(e)}")
-            return None, None
-    
+
     def preprocess_image(self, uploaded_file):
-        """Enhanced image preprocessing with validation"""
-        try:
-            # Validate file size (max 10MB)
-            if uploaded_file.size > 10 * 1024 * 1024:
-                raise ValueError("File size too large. Please upload images smaller than 10MB.")
-            
-            # Load and validate image
-            img = Image.open(uploaded_file).resize((self.img_width, self.img_height)).convert('RGB')
-            img_array = np.array(img) / 255.0
-            
-            return np.expand_dims(img_array, axis=0)
-        
-        except Exception as e:
-            logger.error(f"Image preprocessing error: {e}")
-            raise e
-    
+        if uploaded_file.size > 10 * 1024 * 1024:
+            raise ValueError("File too large. Max 10 MB.")
+        img = Image.open(uploaded_file).resize(
+            (self.img_width, self.img_height)).convert('RGB')
+        return np.expand_dims(np.array(img) / 255.0, axis=0)
+
     def analyze_image(self, processed_image, model):
-        """Analyze image using the trained CNN model"""
-        try:
-            if model is None:
-                raise ValueError("Model not loaded")
-            
-            # Get predictions from your trained model
-            predictions = model.predict(processed_image)
-            
-            # Get the predicted class index and confidence
-            predicted_idx = np.argmax(predictions[0])
-            confidence = float(predictions[0][predicted_idx]) * 100
-            predicted_class = self.class_labels[predicted_idx]
-            
-            # Create detailed predictions dictionary
-            all_predictions = {}
-            for i, label in enumerate(self.class_labels):
-                all_predictions[label] = float(predictions[0][i]) * 100
-            
-            return {
-                'prediction': predicted_class,
-                'confidence': confidence,
-                'predicted_idx': predicted_idx,
-                'all_predictions': all_predictions,
-                'raw_predictions': predictions[0].tolist()
-            }
-        
-        except Exception as e:
-            logger.error(f"Error in image analysis: {e}")
-            raise e
-    
-    def analyze_symptoms(self, symptoms_text, tfidf, text_clf):
-        """Enhanced symptom analysis using your trained NLP model"""
-        try:
-            if not symptoms_text.strip():
-                return {'error': 'Please enter symptoms'}
-            
-            if tfidf is None or text_clf is None:
-                return {'error': 'NLP model not loaded'}
-            
-            # Use your trained model for prediction
-            X_test = tfidf.transform([symptoms_text.lower()])
-            prediction = text_clf.predict(X_test)[0]
-            
-            # Get prediction probabilities if available
-            try:
-                probabilities = text_clf.predict_proba(X_test)[0]
-                confidence = max(probabilities) * 100
-                
-                # Create detailed scores
-                all_scores = {}
-                for i, class_name in enumerate(text_clf.classes_):
-                    all_scores[class_name] = probabilities[i] * 100
-            except:
-                confidence = 75.0  # Default confidence if probabilities not available
-                all_scores = {prediction: 75.0}
-            
-            return {
-                'prediction': prediction,
-                'confidence': confidence,
-                'all_scores': all_scores,
-                'input_text': symptoms_text
-            }
-        
-        except Exception as e:
-            logger.error(f"Error in symptom analysis: {e}")
-            return {'error': f'Analysis failed: {str(e)}'}
-
-class PatientManager:
-    def __init__(self):
-        self.history_file = "patient_history.json"
-    
-    def save_patient_data(self, patient_id, patient_name, analysis_results, entry_number=None):
-        """Save patient data with improved structure and entry numbering"""
-        history = self.load_history()
-        
-        # Get next entry number for this patient
-        if patient_id not in history:
-            history[patient_id] = []
-        
-        if entry_number is None:
-            entry_number = len(history[patient_id]) + 1
-        
-        patient_data = {
-            'patient_id': patient_id,
-            'patient_name': patient_name,
-            'entry_number': entry_number,
-            'timestamp': datetime.now().isoformat(),
-            'analysis_results': analysis_results
-        }
-        
-        history[patient_id].append(patient_data)
-        
-        # Save to session state
-        st.session_state.history = history
-        return entry_number
-    
-    def get_current_session_results(self):
-        """Get all analysis results from current session"""
-        results = {}
-        
-        # Check if there are any analysis results in session state
-        if hasattr(st.session_state, 'current_mri_results'):
-            results['mri_analysis'] = st.session_state.current_mri_results
-            
-        if hasattr(st.session_state, 'current_symptom_results'):
-            results['symptom_analysis'] = st.session_state.current_symptom_results
-            
-        return results if results else None
-    
-    def clear_current_session(self):
-        """Clear current session results after saving"""
-        if hasattr(st.session_state, 'current_mri_results'):
-            del st.session_state.current_mri_results
-        if hasattr(st.session_state, 'current_symptom_results'):
-            del st.session_state.current_symptom_results
-    
-    def load_history(self):
-        """Load patient history from session state"""
-        return st.session_state.get('history', {})
-    
-    def get_patient_summary(self, patient_id):
-        """Generate patient summary statistics"""
-        history = self.load_history()
-        if patient_id not in history:
-            return None
-        
-        records = history[patient_id]
+        if model is None:
+            raise ValueError("Model not loaded")
+        preds = model.predict(processed_image)
+        idx = np.argmax(preds[0])
         return {
-            'total_entries': len(records),
-            'last_visit': records[-1]['timestamp'] if records else None,
-            'analysis_types': [list(r['analysis_results'].keys()) for r in records]
+            'prediction': self.class_labels[idx],
+            'confidence': float(preds[0][idx]) * 100,
+            'all_predictions': {
+                l: float(preds[0][i]) * 100
+                for i, l in enumerate(self.class_labels)
+            },
         }
 
-def create_enhanced_ui():
-    """Create enhanced Streamlit UI"""
-    st.set_page_config(
-        page_title="🩺 Brain Tumor Analyzer",
-        page_icon="🧠",
-        layout="wide",
-        initial_sidebar_state="expanded"
-    )
-    
-    # Enhanced CSS with better accessibility
-    st.markdown("""
-        <style>
-        .main {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            border-radius: 20px;
-            padding: 20px;
-            color: white;
-        }
-        
-        .metric-card {
-            background: rgba(255, 255, 255, 0.1);
-            backdrop-filter: blur(10px);
-            border-radius: 15px;
-            padding: 20px;
-            border: 1px solid rgba(255, 255, 255, 0.2);
-            margin: 10px 0;
-            color: white;
-        }
-        
-        .prediction-high {
-            background: linear-gradient(45deg, #ff6b6b, #ee5a24);
-            color: white;
-            padding: 15px;
-            border-radius: 10px;
-            text-align: center;
-            font-weight: bold;
-            font-size: 1.2em;
-        }
-        
-        .prediction-medium {
-            background: linear-gradient(45deg, #feca57, #ff9ff3);
-            color: white;
-            padding: 15px;
-            border-radius: 10px;
-            text-align: center;
-            font-weight: bold;
-            font-size: 1.2em;
-        }
-        
-        .prediction-low {
-            background: linear-gradient(45deg, #48dbfb, #0abde3);
-            color: white;
-            padding: 15px;
-            border-radius: 10px;
-            text-align: center;
-            font-weight: bold;
-            font-size: 1.2em;
-        }
-        
-        .confidence-bar {
-            height: 25px;
-            border-radius: 12px;
-            background: linear-gradient(90deg, #ff6b6b, #feca57, #48dbfb);
-            position: relative;
-            overflow: hidden;
-            margin: 10px 0;
-        }
-        
-        .stButton > button {
-            background: linear-gradient(45deg, #667eea, #764ba2);
-            color: white;
-            border: none;
-            border-radius: 25px;
-            padding: 12px 24px;
-            font-weight: bold;
-            transition: all 0.3s ease;
-        }
-        
-        .stButton > button:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 5px 15px rgba(0,0,0,0.2);
-        }
-        
-        .sidebar .stSelectbox label, .sidebar .stTextInput label {
-            color: white !important;
-            font-weight: bold;
-        }
-        
-        @media (max-width: 768px) {
-            .main { padding: 10px; }
-            .metric-card { margin: 5px 0; }
-        }
-        </style>
-    """, unsafe_allow_html=True)
-
-def main():
-    # Initialize components
-    analyzer = BrainTumorAnalyzer()
-    patient_manager = PatientManager()
-    
-    # Create UI
-    create_enhanced_ui()
-    
-    # Header
-    st.title("🩺 Advanced Brain Tumor Analyzer")
-    st.markdown("### AI-Powered Medical Image Analysis & Symptom Assessment")
-    
-    # Load models
-    cnn_model = analyzer.load_cnn_model()
-    tfidf, text_clf = analyzer.load_nlp_model()
-    
-    if cnn_model is None:
-        st.error("❌ Cannot proceed without CNN model. Please check your model path.")
-        st.stop()
-    
-    # Sidebar for patient information
-    with st.sidebar:
-        st.header("👤 Patient Information")
-        
-        # Patient details
-        patient_id = st.text_input("🆔 Patient ID", key="patient_id")
-        patient_name = st.text_input("📝 Patient Name", key="patient_name")
-        patient_age = st.number_input("🎂 Age", min_value=1, max_value=120, value=30)
-        patient_gender = st.selectbox("⚧ Gender", ["Male", "Female", "Other"])
-        
-        # Analysis settings
-        st.subheader("⚙ Analysis Settings")
-        show_confidence_details = st.checkbox("Show detailed confidence scores", True)
-    
-    # Main content area
-    col1, col2 = st.columns([1, 1])
-    
-    # Image analysis section
-    with col1:
-        st.subheader(" MRI Image Analysis")
-        
-        uploaded_file = st.file_uploader(
-            "Upload MRI scan", 
-            type=['png', 'jpg', 'jpeg'],
-            help="Supported formats: PNG, JPG, JPEG"
-        )
-        
-        if uploaded_file:
-            # Always show the image
-            st.image(uploaded_file, caption="Uploaded MRI Scan", width=300)
-            
-            # Always run analysis when image is uploaded
+    def predict_symptoms(self, text):
+        if not text.strip():
+            return {'error': 'Please enter symptoms'}
+        try:
+            X = self.tfidf.transform([text.lower()])
+            pred = self.text_clf.predict(X)[0]
             try:
-                with st.spinner(" Analyzing MRI scan..."):
-                    # Process image using your preprocessing
-                    processed_img = analyzer.preprocess_image(uploaded_file)
-                    results = analyzer.analyze_image(processed_img, cnn_model)
-                    
-                    # Display results
-                    prediction = results['prediction'].capitalize()
-                    confidence = results['confidence']
-                    
-                    # Choose styling based on confidence
-                    if confidence >= 80:
-                        style_class = "prediction-high"
-                    elif confidence >= 60:
-                        style_class = "prediction-medium"
-                    else:
-                        style_class = "prediction-low"
-                    
-                    st.markdown(f"""
-                        <div class="{style_class}">
-                            🎯 Prediction: {prediction}<br>
-                            📊 Confidence: {confidence:.1f}%
-                        </div>
-                    """, unsafe_allow_html=True)
-                    
-                    # Detailed confidence scores
-                    if show_confidence_details:
-                        st.subheader(" Detailed Analysis")
-                        for label, score in results['all_predictions'].items():
-                            # Calculate delta from average (25%)
-                            delta_val = score - 25.0
-                            delta_str = f"{delta_val:+.1f}%" if delta_val != 0 else None
-                            
-                            st.metric(
-                                label.capitalize(),
-                                f"{score:.1f}%",
-                                delta=delta_str
-                            )
-                    
-                    # Store results in session state for later saving
-                    st.session_state.current_mri_results = results
-                    
-                    st.success("✅ MRI analysis complete! Use 'Save Results' button below to save.")
-            
-            except Exception as e:
-                st.error(f"❌ Error processing image: {str(e)}")
-    
-    # Symptom analysis section
-    with col2:
-        st.subheader("Symptom Analysis")
-        
-        symptoms_input = st.text_area(
-            "Describe symptoms",
-            height=100,
-            placeholder="e.g., persistent headaches, vision problems, memory issues...",
-            help="Enter all relevant symptoms"
-        )
-        
-        if st.button("🔬 Analyze Symptoms"):
-            if not symptoms_input.strip():
-                st.warning("⚠ Please enter symptoms to analyze!")
-            else:
-                with st.spinner(" Analyzing symptoms..."):
-                    symptom_results = analyzer.analyze_symptoms(symptoms_input, tfidf, text_clf)
-                    
-                    if 'error' in symptom_results:
-                        st.error(f"❌ {symptom_results['error']}")
-                    else:
-                        prediction = symptom_results['prediction'].capitalize()
-                        
-                        # Display main result without confidence percentage
-                        st.markdown(f"""
-                            <div class="metric-card">
-                                <h3>🎯 Symptom-Based Analysis</h3>
-                                <p><strong>Result:</strong> There is a chance of {prediction}</p>
-                            </div>
-                        """, unsafe_allow_html=True)
-                        
-                        # Store results in session state for later saving
-                        st.session_state.current_symptom_results = symptom_results
-                        
-                        st.success("✅ Symptom analysis complete! Use 'Save Results' button below to save.")
-    
-    # Dedicated Save Section
-    st.markdown("---")
-    st.subheader("💾 Save Results")
-    
-    # Check if there are any results to save
-    current_results = patient_manager.get_current_session_results()
-    
-    if current_results:
-        # Show what will be saved in a nice format
-        result_types = []
-        if 'mri_analysis' in current_results:
-            result_types.append(" MRI Analysis")
-        if 'symptom_analysis' in current_results:
-            result_types.append(" Symptom Analysis")
-        
-        st.markdown(f"""
-            <div class="metric-card">
-                <h4>📋 Ready to Save:</h4>
-                <p>{' • '.join(result_types)}</p>
+                probs = self.text_clf.predict_proba(X)[0]
+                conf = max(probs) * 100
+                scores = {c: p * 100 for c, p in zip(self.text_clf.classes_, probs)}
+            except Exception:
+                conf = 75.0
+                scores = {pred: 75.0}
+            return {
+                'prediction': pred,
+                'confidence': conf,
+                'all_scores': scores,
+                'input_text': text,
+            }
+        except Exception as e:
+            return {'error': str(e)}
+
+
+# ==========================================================
+#  Report generation
+# ==========================================================
+def create_report_text(patient_name, patient_id, patient_age, patient_gender,
+                       image_result, symptom_result):
+    now = datetime.now().strftime("%B %d, %Y  |  %I:%M %p")
+    border = "=" * 56
+
+    lines = [
+        border,
+        "            N E U R O S C A N   A I",
+        "       Brain Tumor Detection & Analysis Report",
+        border,
+        "",
+        f"  Date / Time      : {now}",
+        f"  Patient Name     : {patient_name or 'N/A'}",
+        f"  Patient ID       : {patient_id or 'N/A'}",
+        f"  Age              : {patient_age}",
+        f"  Gender           : {patient_gender}",
+        "",
+        "-" * 56,
+        "  DIAGNOSTIC RESULTS",
+        "-" * 56,
+    ]
+
+    if image_result:
+        pred = display_name(image_result['prediction'])
+        conf = image_result['confidence']
+        lines += [
+            "",
+            "  [MRI Image Analysis - MobileNetV2 CNN]",
+            f"    Prediction  : {pred}",
+            f"    Confidence  : {conf:.1f}%",
+        ]
+        if 'all_predictions' in image_result:
+            lines.append("    Class-wise breakdown:")
+            for label, score in image_result['all_predictions'].items():
+                bar = "#" * max(int(score / 4), 0)
+                lines.append(f"      {display_name(label):14s} {score:6.1f}%  {bar}")
+    else:
+        lines += ["", "  [MRI Image Analysis] : Not performed"]
+
+    if symptom_result and 'error' not in symptom_result:
+        pred = display_name(symptom_result['prediction'])
+        conf = symptom_result.get('confidence', 0)
+        lines += [
+            "",
+            "  [Symptom Analysis - TF-IDF + Logistic Regression]",
+            f"    Prediction  : {pred}",
+            f"    Confidence  : {conf:.1f}%",
+            f"    Symptoms    : \"{symptom_result.get('input_text', '')}\"",
+        ]
+        if 'all_scores' in symptom_result:
+            lines.append("    Class-wise breakdown:")
+            for label, score in symptom_result['all_scores'].items():
+                bar = "#" * max(int(score / 4), 0)
+                lines.append(f"      {display_name(label):14s} {score:6.1f}%  {bar}")
+    else:
+        lines += ["", "  [Symptom Analysis] : Not performed"]
+
+    if image_result and symptom_result and 'error' not in symptom_result:
+        lines += [
+            "",
+            "-" * 56,
+            "  COMBINED ASSESSMENT",
+            "-" * 56,
+        ]
+        ip = image_result['prediction']
+        sp = symptom_result['prediction']
+        if ip == sp:
+            lines.append(f"  Both analyses agree: {display_name(ip)}")
+            lines.append("  Recommendation: Results are consistent.")
+        else:
+            lines.append(f"  MRI suggests: {display_name(ip)}")
+            lines.append(f"  Symptoms suggest: {display_name(sp)}")
+            lines.append("  Recommendation: Further clinical evaluation advised.")
+
+    lines += [
+        "",
+        "-" * 56,
+        "  DISCLAIMER",
+        "-" * 56,
+        "  This report is generated by an AI system for research",
+        "  and educational purposes ONLY. It does NOT constitute",
+        "  a medical diagnosis. Always consult a qualified",
+        "  healthcare professional.",
+        "",
+        border,
+        "  NeuroScan AI  |  Powered by MobileNetV2 & Scikit-learn",
+        border,
+    ]
+    return "\n".join(lines)
+
+
+# ==========================================================
+#  Helpers
+# ==========================================================
+def display_name(prediction):
+    if prediction == 'notumor':
+        return "No Tumor"
+    return prediction.capitalize()
+
+
+def badge_class(prediction, confidence):
+    if prediction == 'notumor':
+        return "pred-clear"
+    if confidence >= 80:
+        return "pred-high"
+    if confidence >= 60:
+        return "pred-medium"
+    return "pred-low"
+
+
+def render_score_bars(all_predictions):
+    html = ""
+    for label, score in all_predictions.items():
+        html += f"""
+        <div class="score-row">
+            <span class="score-label">{display_name(label)}</span>
+            <div class="score-bar-bg">
+                <div class="score-bar-fill" style="width:{max(score,1)}%"></div>
             </div>
-        """, unsafe_allow_html=True)
-        
-        # Save button
-        col_save1, col_save2, col_save3 = st.columns([1, 1, 1])
-        with col_save2:
-            if st.button("💾 Save Results", key="save_results_btn", type="primary", use_container_width=True):
-                if patient_id.strip() and patient_name.strip():
-                    # Save all current results
-                    entry_number = patient_manager.save_patient_data(
-                        patient_id, 
-                        patient_name, 
-                        current_results
-                    )
-                    
-                    # Clear current session results
-                    patient_manager.clear_current_session()
-                    
-                    st.success(f"✅ Results saved as Entry #{entry_number} for {patient_name}!")
-                    st.balloons()  # Fun celebration effect
-                    
-                    # Force refresh to update the UI
-                    st.rerun()
+            <span class="score-value">{score:.1f}%</span>
+        </div>"""
+    st.markdown(html, unsafe_allow_html=True)
+
+
+# ==========================================================
+#  MAIN
+# ==========================================================
+def main():
+    # Init database on first run
+    get_db().close()
+
+    analyzer = BrainTumorAnalyzer()
+
+    # ── Banner ──
+    st.markdown("""
+    <div class="ns-banner">
+        <h1>🧠 NeuroScan AI</h1>
+        <p>Intelligent Brain Tumor Detection & Symptom Analysis System</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # ── Load CNN ──
+    cnn_model = analyzer.load_cnn_model()
+    if cnn_model is None:
+        st.error(
+            "Cannot proceed without CNN model. "
+            "Place 'my_brain_tumor_mobilenetv2.h5' in the project root."
+        )
+        st.stop()
+
+    # ── Sidebar ──
+    with st.sidebar:
+        st.markdown("### Patient Information")
+        patient_id = st.text_input("Patient ID", key="patient_id")
+        patient_name = st.text_input("Patient Name", key="patient_name")
+        patient_age = st.number_input("Age", min_value=1, max_value=120, value=30)
+        patient_gender = st.selectbox("Gender", ["Male", "Female", "Other"])
+        st.markdown("---")
+        st.markdown("### Settings")
+        show_details = st.checkbox("Show detailed confidence scores", True)
+
+    # ── Navigation ──
+    tab_analysis, tab_history = st.tabs(["Analysis", "Patient History"])
+
+    # ============================================================
+    #  TAB 1 — ANALYSIS
+    # ============================================================
+    with tab_analysis:
+        col1, col2 = st.columns(2, gap="large")
+
+        # ── MRI IMAGE ANALYSIS ──
+        with col1:
+            st.markdown(
+                '<div class="section-label">MRI Image Analysis</div>',
+                unsafe_allow_html=True)
+
+            uploaded_file = st.file_uploader(
+                "Upload MRI scan", type=['png', 'jpg', 'jpeg'],
+                help="Supported: PNG, JPG, JPEG (max 10 MB)")
+
+            if uploaded_file:
+                st.image(uploaded_file, caption="Uploaded MRI Scan", width=280)
+                try:
+                    with st.spinner("Analyzing MRI scan..."):
+                        processed = analyzer.preprocess_image(uploaded_file)
+                        results = analyzer.analyze_image(processed, cnn_model)
+                        st.session_state.current_mri = results
+
+                        bc = badge_class(results['prediction'],
+                                         results['confidence'])
+                        st.markdown(f"""
+                        <div class="pred-badge {bc}">
+                            Prediction: {display_name(results['prediction'])}
+                            &mdash; Confidence: {results['confidence']:.1f}%
+                        </div>
+                        """, unsafe_allow_html=True)
+
+                        if show_details:
+                            st.markdown("**Class-wise Scores**")
+                            render_score_bars(results['all_predictions'])
+                except Exception as e:
+                    st.error(f"Error: {e}")
+
+        # ── SYMPTOM ANALYSIS ──
+        with col2:
+            st.markdown(
+                '<div class="section-label">Symptom Analysis</div>',
+                unsafe_allow_html=True)
+
+            symptoms_input = st.text_area(
+                "Describe symptoms", height=130,
+                placeholder="e.g., persistent headaches, blurred vision, nausea...")
+
+            if st.button("Analyze Symptoms", key="btn_sym"):
+                if not symptoms_input.strip():
+                    st.warning("Please enter symptoms to analyze.")
                 else:
-                    st.error("❌ Please enter both Patient ID and Patient Name to save results!")
-    else:
-        st.info("📝 No analysis results to save. Perform MRI or symptom analysis first.")
-    
-    st.markdown("---")
-    
-    # Combined analysis section
-    st.subheader(" Comprehensive Analysis")
-    
-    if st.button("📊 Generate Full Report"):
-        if patient_id.strip() and patient_name.strip():
-            # Generate comprehensive report
-            st.success(f"📋 Comprehensive medical report generated for {patient_name}!")
-            
-            # Patient summary
-            summary = patient_manager.get_patient_summary(patient_id)
-            
-            # Display patient info
-            col3, col4, col5 = st.columns(3)
-            with col3:
-                entries_count = summary['total_entries'] if summary else 0
-                st.metric("Total Entries", entries_count)
-            with col4:
-                st.metric("Age", patient_age)
-            with col5:
-                st.metric("Gender", patient_gender)
-            
-            # Additional report info
-            st.markdown("### 📋 Patient Summary")
-            st.write(f"**Patient ID:** {patient_id}")
-            st.write(f"**Patient Name:** {patient_name}")
-            st.write(f"**Age:** {patient_age}")
-            st.write(f"**Gender:** {patient_gender}")
-            
-            if summary and summary['last_visit']:
-                st.write(f"**Last Entry:** {summary['last_visit'][:19]}")
+                    with st.spinner("Analyzing symptoms..."):
+                        result = analyzer.predict_symptoms(symptoms_input)
+                        if 'error' in result:
+                            st.error(result['error'])
+                        else:
+                            st.session_state.current_sym = result
+
+            # Always show symptom result from session (survives reruns)
+            if 'current_sym' in st.session_state:
+                sr = st.session_state.current_sym
+                if 'error' not in sr:
+                    st.markdown(f"""
+                    <div class="result-card">
+                        <h4>Symptom-Based Analysis</h4>
+                        <p><b>Result:</b> {display_name(sr['prediction'])}</p>
+                        <p><b>Confidence:</b> {sr['confidence']:.1f}%</p>
+                        <p><b>Symptoms:</b> {sr.get('input_text', '')}</p>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    if show_details and 'all_scores' in sr:
+                        render_score_bars(sr['all_scores'])
+
+        # ── GENERATE REPORT (this is the only action button) ──
+        st.markdown("---")
+        st.markdown(
+            '<div class="section-label">Generate & Save Report</div>',
+            unsafe_allow_html=True)
+
+        mri_data = st.session_state.get('current_mri')
+        sym_data = st.session_state.get('current_sym')
+
+        if mri_data or sym_data:
+            # Show what will be included
+            parts = []
+            if mri_data:
+                parts.append(
+                    f"MRI: <b>{display_name(mri_data['prediction'])}</b>"
+                    f" ({mri_data['confidence']:.1f}%)")
+            if sym_data and 'error' not in sym_data:
+                parts.append(
+                    f"Symptoms: <b>{display_name(sym_data['prediction'])}</b>"
+                    f" ({sym_data.get('confidence',0):.1f}%)")
+
+            st.markdown(f"""
+            <div class="result-card">
+                <h4>Report will include:</h4>
+                <p>{'&nbsp; | &nbsp;'.join(parts)}</p>
+            </div>
+            """, unsafe_allow_html=True)
+
+            if st.button("Generate Report & Save to Records",
+                         key="gen_save", type="primary"):
+                if not patient_id.strip() or not patient_name.strip():
+                    st.error("Enter Patient ID and Patient Name in the sidebar first.")
+                else:
+                    report = create_report_text(
+                        patient_name=patient_name,
+                        patient_id=patient_id,
+                        patient_age=patient_age,
+                        patient_gender=patient_gender,
+                        image_result=mri_data,
+                        symptom_result=sym_data,
+                    )
+                    # Save to database
+                    save_record(
+                        patient_id=patient_id,
+                        patient_name=patient_name,
+                        age=patient_age,
+                        gender=patient_gender,
+                        mri_data=mri_data,
+                        symptom_data=sym_data if (sym_data and 'error' not in sym_data) else None,
+                        report_text=report,
+                    )
+                    st.session_state.generated_report = report
+                    st.success(
+                        f"Report generated and saved for {patient_name} "
+                        f"(ID: {patient_id})")
+
+            # Show generated report
+            if 'generated_report' in st.session_state:
+                st.markdown(
+                    f'<div class="report-preview">'
+                    f'{st.session_state.generated_report}</div>',
+                    unsafe_allow_html=True)
+                st.markdown("")
+                safe = (patient_name or "patient").replace(" ", "_")
+                st.download_button(
+                    label="Download Report (.txt)",
+                    data=st.session_state.generated_report,
+                    file_name=(
+                        f"NeuroScan_{safe}"
+                        f"_{datetime.now().strftime('%Y%m%d_%H%M')}.txt"),
+                    mime="text/plain")
+
+            # Clear button to start fresh analysis
+            st.markdown("")
+            if st.button("Clear current analysis (start new patient)"):
+                for k in ('current_mri', 'current_sym', 'generated_report'):
+                    st.session_state.pop(k, None)
+                st.rerun()
+        else:
+            st.caption(
+                "Upload an MRI scan or enter symptoms above, "
+                "then generate a report here.")
+
+    # ============================================================
+    #  TAB 2 — PATIENT HISTORY (from database)
+    # ============================================================
+    with tab_history:
+        st.markdown(
+            '<div class="section-label">Patient History</div>',
+            unsafe_allow_html=True)
+
+        st.caption(
+            "All saved records are stored in the database. "
+            "Search by Patient ID or Name to find past reports.")
+
+        # Search controls
+        h_col1, h_col2 = st.columns(2)
+        with h_col1:
+            search_pid = st.text_input(
+                "Search by Patient ID",
+                placeholder="e.g., 237",
+                key="hist_search_id")
+        with h_col2:
+            search_pname = st.text_input(
+                "Search by Patient Name",
+                placeholder="e.g., John",
+                key="hist_search_name")
+
+        # Quick select from existing patients
+        known_patients = get_all_patient_ids()
+        if known_patients:
+            options = ["All patients"] + [
+                f"{pid} - {pname}" for pid, pname in known_patients
+            ]
+            selected = st.selectbox("Or select a patient:", options,
+                                    key="hist_select")
+            if selected != "All patients":
+                search_pid = selected.split(" - ")[0]
+
+        # Fetch records
+        records = search_records(search_pid, search_pname)
+
+        if records:
+            st.markdown(f"**Found {len(records)} record(s)**")
+
+            for rec in records:
+                rec_id = rec['id']
+                ts_raw = rec['created_at'][:19]
+                try:
+                    ts = datetime.fromisoformat(ts_raw).strftime(
+                        "%b %d, %Y  %I:%M %p")
+                except Exception:
+                    ts = ts_raw
+
+                # Build summary
+                parts = []
+                if rec['mri_result']:
+                    parts.append(
+                        f"MRI: <b>{display_name(rec['mri_result'])}</b>"
+                        f" ({rec['mri_confidence']:.1f}%)")
+                if rec['symptom_result']:
+                    parts.append(
+                        f"Symptoms: <b>{display_name(rec['symptom_result'])}</b>"
+                        f" ({rec['symptom_confidence']:.1f}%)")
+                body = " &nbsp;|&nbsp; ".join(parts) if parts else "No data"
+
+                st.markdown(f"""
+                <div class="history-card">
+                    <div class="hc-title">
+                        {rec['patient_name']} (ID: {rec['patient_id']})
+                        &nbsp;&middot;&nbsp; {ts}
+                        &nbsp;&middot;&nbsp; Age: {rec['age']}, {rec['gender']}
+                    </div>
+                    <div class="hc-body">{body}</div>
+                </div>
+                """, unsafe_allow_html=True)
+
+                # Action buttons
+                b1, b2, b3 = st.columns([1, 1, 4])
+                with b1:
+                    if st.button("View Report", key=f"view_{rec_id}"):
+                        st.session_state[f"show_{rec_id}"] = not st.session_state.get(
+                            f"show_{rec_id}", False)
+                        st.rerun()
+                with b2:
+                    if st.button("Delete", key=f"del_{rec_id}"):
+                        delete_record(rec_id)
+                        st.success("Record deleted.")
+                        st.rerun()
+
+                # Show/hide report
+                if st.session_state.get(f"show_{rec_id}", False):
+                    report = rec.get('report_text', '')
+                    if report:
+                        st.markdown(
+                            f'<div class="report-preview">{report}</div>',
+                            unsafe_allow_html=True)
+                        safe = rec['patient_name'].replace(" ", "_")
+                        st.download_button(
+                            label="Download this report",
+                            data=report,
+                            file_name=f"NeuroScan_{safe}_{rec_id}.txt",
+                            mime="text/plain",
+                            key=f"dl_{rec_id}")
+                    else:
+                        st.info("No report text saved for this record.")
+        else:
+            if search_pid or search_pname:
+                st.info("No records found matching your search.")
             else:
-                st.write("**Last Entry:** No previous entries")
-                
-        else:
-            st.warning("⚠ Please enter both Patient ID and Patient Name to generate a full report!")
-    
-    # Patient history section
-    st.subheader("📜 Patient History")
-    
-    if patient_manager.load_history():
-        # Add search functionality
-        col_search, col_select = st.columns([1, 1])
-        
-        with col_search:
-            search_id = st.text_input(" Search by Patient ID", placeholder="Enter Patient ID to search")
-        
-        # Filter patients based on search
-        all_patient_ids = list(patient_manager.load_history().keys())
-        if search_id:
-            filtered_ids = [pid for pid in all_patient_ids if search_id.lower() in pid.lower()]
-        else:
-            filtered_ids = all_patient_ids
-        
-        with col_select:
-            selected_patient = st.selectbox("Select Patient", [""] + filtered_ids)
-        
-        if selected_patient:
-            history = patient_manager.load_history()[selected_patient]
-            
-            # Display patient info
-            if history:
-                st.write(f"**Patient:** {history[0].get('patient_name', 'Unknown')}")
-                st.write(f"**Total Entries:** {len(history)}")
-            
-            # Display history in expandable sections
-            for i, record in enumerate(history):
-                entry_num = record.get('entry_number', i+1)
-                with st.expander(f"Entry #{entry_num} - {record['timestamp'][:19]}"):
-                    st.json(record['analysis_results'])
-                    
-                    # Fixed delete button
-                    if st.button(f"🗑 Delete Entry #{entry_num}", key=f"delete_{selected_patient}_{i}_{record['timestamp']}"):
-                        # Properly delete the record
-                        if selected_patient in st.session_state.history:
-                            if len(st.session_state.history[selected_patient]) > i:
-                                st.session_state.history[selected_patient].pop(i)
-                                # If no more records for this patient, remove patient entirely
-                                if not st.session_state.history[selected_patient]:
-                                    del st.session_state.history[selected_patient]
-                                st.success("✅ Entry deleted successfully!")
-                                st.rerun()
-    else:
-        st.info("📝 No patient history available yet.")
-    
-    # Footer
+                st.info(
+                    "No records in the database yet. "
+                    "Generate a report from the Analysis tab to save one.")
+
+    # ── Footer ──
     st.markdown("---")
     st.markdown("""
-        <div style='text-align: center; color: rgba(255,255,255,0.7);'>
-            🏥 Advanced Brain Tumor Analyzer v2.0<br>
-            ⚠ For research and educational purposes only. Always consult healthcare professionals.
-        </div>
+    <div class="ns-footer">
+        NeuroScan AI v3.0 &middot; Powered by MobileNetV2 & Scikit-learn<br>
+        For research and educational purposes only.
+        Always consult a healthcare professional.
+    </div>
     """, unsafe_allow_html=True)
+
 
 if __name__ == "__main__":
     main()
